@@ -1,7 +1,12 @@
+import os
 import sqlalchemy as db
+from dotenv import load_dotenv
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-engine = db.create_engine("postgresql://user:admin@localhost/bionic", echo=True)
+load_dotenv()
+
+DB_URI = os.getenv('DB_URI')
+engine = db.create_engine(DB_URI, echo=True)
 Base = declarative_base()
 
 
