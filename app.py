@@ -14,6 +14,7 @@ app = Flask(__name__)
 
 minio_client = Minio('localhost:9000', access_key='s3manager', secret_key='s3manager', secure=False)
 minio_bucket_name = 'bionic'
+max_workers = 10
 
 logging.basicConfig(level=logging.INFO)
 
@@ -30,19 +31,19 @@ def save_frame_metadata(frame):
 
 def save_video(video_path, video_filename):
     observation_post_name = video_filename.split("_")[0]
-    video_os_filepath = f'/videos/{video_filename}'
-    minio_client.fput_object(minio_bucket_name, video_os_filepath, video_path)
-    video_instance = Video(observation_post_name=observation_post_name, OS_filepath=video_os_filepath, frame_count=5)
+    video_instance = Video(observation_post_name=observation_post_name)
     session.add(video_instance)
     session.commit()
+    video_os_filepath = f'/videos/{video_instance.id}_{video_filename}'
+    minio_client.fput_object(minio_bucket_name, video_os_filepath, video_path)
+    video_instance.OS_filepath = video_os_filepath
 
     return video_instance
 
 
 def save_frame(frame, curr_frame_index, video_instance, video_name):
     frame_metadata = save_frame_metadata(frame)
-
-    frame_os_filepath = f'/frames/{video_name}/frame_{curr_frame_index}.jpg'
+    frame_os_filepath = f'/frames/{video_instance.id}_{video_name}/frame_{curr_frame_index}.jpg'
     _, jpeg_frame = cv2.imencode('.jpg', frame)
     image_bytes = BytesIO(jpeg_frame)
     minio_client.put_object(minio_bucket_name, frame_os_filepath,
@@ -57,26 +58,34 @@ def save_frame(frame, curr_frame_index, video_instance, video_name):
     return frame_db_instance
 
 
+def save_raw_frame(args_tuple):
+    save_frame(*args_tuple)
+
+
 @app.post("/video")
 def upload_video_from_local_path():
     start_time = time.perf_counter()
 
-    video_path = request.json['path']
-    logging.info(f'Uploading video from local path: "{video_path}"')
-    video_name = os.path.basename(video_path)
-    video_instance = save_video(video_path, video_name)
-    video = cv2.VideoCapture(video_path)
+    video_file_path = request.json['path']
+    logging.info(f'Uploading video from local path: "{video_file_path}"')
+    video_name = os.path.basename(video_file_path)
+    video_instance = save_video(video_file_path, video_name)
+    video = cv2.VideoCapture(video_file_path)
     curr_frame_index = 0
+    thread_pool_map_args = []
 
-    with Pool(20) as thread_pool:
-        while True:
-            ret, frame = video.read()
+    while True:
+        ret, frame = video.read()
 
-            if ret:
-                thread_pool.apply_async(save_frame, (frame, curr_frame_index, video_instance, video_name))
-                curr_frame_index += 1
-            else:
-                break
+        if ret:
+            thread_pool_map_args.append((frame, curr_frame_index, video_instance, video_name))
+            curr_frame_index += 1
+        else:
+            break
+
+    with Pool(max_workers) as thread_pool:
+        thread_pool.map(save_raw_frame,
+                        thread_pool_map_args)
 
     video.release()
     video_instance.frame_count = curr_frame_index - 1
@@ -119,7 +128,8 @@ def get_video_frame_paths(video_id):
 
 @app.get("/video/<video_id>/frames/<frame_index>/path")
 def get_video_frame_path_by_index(video_id, frame_index):
-    frame_instance = session.query(Frame).filter(Frame.video_id == video_id, Frame.frame_index == frame_index).first()
+    frame_instance = session.query(Frame).filter(Frame.video_id == video_id,
+                                                 Frame.frame_index == frame_index).first()
 
     if frame_instance is None:
         abort(404)
@@ -134,7 +144,7 @@ def download_video(video_id):
     if video_instance is None:
         abort(404)
 
-    video_file = minio_client.get_object('bionic', video_instance.OS_filepath)
+    video_file = minio_client.get_object(minio_bucket_name, video_instance.OS_filepath)
     video_name = os.path.basename(video_instance.OS_filepath)
 
     return send_file(video_file, download_name=video_name, as_attachment=True)
@@ -148,17 +158,17 @@ def download_threat_frames(video_id):
     if len(frames) == 0:
         abort(404)
 
-    mem_zip = BytesIO()
+    threat_frames_zip = BytesIO()
 
-    with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(threat_frames_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for frame in frames:
-            frame_object = minio_client.get_object('bionic', frame.OS_filepath)
+            frame_object = minio_client.get_object(minio_bucket_name, frame.OS_filepath)
             zf.writestr(os.path.basename(frame.OS_filepath), frame_object.read())
 
-    mem_zip.seek(0)
+    threat_frames_zip.seek(0)
     zip_file_name = "threat_frames.zip"
 
-    return send_file(mem_zip, mimetype="application/zip", download_name=zip_file_name, as_attachment=True)
+    return send_file(threat_frames_zip, mimetype="application/zip", download_name=zip_file_name, as_attachment=True)
 
 
 @app.get("/")
