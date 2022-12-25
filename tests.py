@@ -18,22 +18,8 @@ def test_upload_video_from_local_path(client):
     video = session.query(Video).first()
     assert video is not None
     assert video.observation_post_name == 'test'
-    assert video.OS_filepath == '/videos/test_video.mp4'
-    assert video.frame_count == 5
-
-    frame = session.query(Frame).first()
-    assert frame is not None
-    assert frame.video_id == video.id
-    assert frame.metadata_id is not None
-    assert frame.OS_filepath == '/frames/test_video.mp4/frame_0.jpg'
-    assert frame.frame_index == 0
-
-    metadata = session.query(FrameMetadata).get(frame.metadata_id)
-    assert metadata is not None
-    assert metadata.is_threat is not None
-    assert metadata.fov is not None
-    assert metadata.azimuth is not None
-    assert metadata.elevation is not None
+    assert video.OS_filepath == f'/videos/{video.id}_test_video.mp4'
+    assert video.frame_count == 466
 
 
 def test_save_video(client):
@@ -58,16 +44,14 @@ def test_save_frame_metadata():
 
 def test_save_frame(client):
     video_instance = Video(observation_post_name='test', OS_filepath='/videos/test_video.mp4', frame_count=5)
-    frame_metadata = FrameMetadata(is_threat=False, fov=60, azimuth=45, elevation=30)
-    session.add(video_instance, frame_metadata)
+    session.add(video_instance)
     session.commit()
     cv_frame = cv2.imread('test_frame.jpg')
-    frame_instance = save_frame(cv_frame, 0, video_instance, 'test_video.mp4', frame_metadata)
+    frame_instance = save_frame(cv_frame, 0, video_instance, 'test_video.mp4')
     session.commit()
 
     saved_frame = session.query(Frame).get(frame_instance.id)
     assert saved_frame is not None
-    assert saved_frame.OS_filepath == '/frames/test_video.mp4/frame_0.jpg'
+    assert saved_frame.OS_filepath == f'/frames/{video_instance.id}_test_video.mp4/frame_0.jpg'
     assert saved_frame.video_id == video_instance.id
-    assert saved_frame.metadata_id == frame_metadata.id
     assert saved_frame.frame_index == 0
