@@ -1,12 +1,12 @@
 import os
 import sqlalchemy as db
 from dotenv import load_dotenv
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.orm import declarative_base, relationship
 
 load_dotenv()
 
 DB_URI = os.getenv('DB_URI')
-engine = db.create_engine(DB_URI, echo=True)
+engine = db.create_engine(DB_URI)
 Base = declarative_base()
 
 
@@ -44,5 +44,3 @@ class Frame(Base):
 
 
 Base.metadata.create_all(engine)
-Session = sessionmaker(bind=engine)
-session = Session()
